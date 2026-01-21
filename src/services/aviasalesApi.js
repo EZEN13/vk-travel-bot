@@ -46,8 +46,8 @@ class AviasalesApi {
         timeout: 10000  // 10 секунд таймаут
       });
 
-      // Форматируем результаты для AI
-      return this.formatFlightResults(response.data.data, adults);
+      // Форматируем результаты для AI (передаём параметры поиска)
+      return this.formatFlightResults(response.data.data, adults, origin, destination, departureDate, returnDate);
     } catch (error) {
       console.error('❌ Ошибка поиска авиабилетов:', error.message);
 
@@ -57,24 +57,56 @@ class AviasalesApi {
   }
 
   /**
+   * Генерировать deeplink для поиска на Aviasales
+   * @param {Object} params - параметры поиска
+   * @param {string} params.origin - IATA код вылета
+   * @param {string} params.destination - IATA код прилёта
+   * @param {string} params.departureDate - дата вылета (YYYY-MM-DD)
+   * @param {string} params.returnDate - дата возврата (YYYY-MM-DD, опционально)
+   * @returns {string} Deeplink URL
+   */
+  generateDeepLink({ origin, destination, departureDate, returnDate }) {
+    // Формат даты: 20260501 (без дефисов)
+    const formattedDep = departureDate.replace(/-/g, '');
+    const formattedRet = returnDate ? returnDate.replace(/-/g, '') : '';
+
+    // Формат: /search/{origin}{dep_date}{destination}{ret_date}{adults}
+    return `https://www.aviasales.ru/search/${origin}${formattedDep}${destination}${formattedRet}1?marker=${this.marker}`;
+  }
+
+  /**
    * Форматировать результаты для AI
    * @param {Array} flights - массив рейсов от API
    * @param {number} adults - количество взрослых
+   * @param {string} origin - IATA код вылета
+   * @param {string} destination - IATA код прилёта
+   * @param {string} departureDate - дата вылета для fallback ссылки
+   * @param {string} returnDate - дата возврата для fallback ссылки
    * @returns {Array|null} Форматированный массив или null
    */
-  formatFlightResults(flights, adults) {
+  formatFlightResults(flights, adults, origin, destination, departureDate, returnDate) {
     if (!flights || flights.length === 0) {
       return null;
     }
 
-    return flights.slice(0, 3).map(flight => ({
-      price: flight.value * adults,
-      airline: flight.airline,
-      departure_at: flight.departure_at,
-      return_at: flight.return_at,
-      flight_number: flight.flight_number,
-      link: flight.link || `https://www.aviasales.ru/?marker=${this.marker}`
-    }));
+    return flights.slice(0, 3).map(flight => {
+      // Генерируем правильный deeplink
+      const deeplink = flight.link || this.generateDeepLink({
+        origin,
+        destination,
+        departureDate: flight.departure_at || departureDate,
+        returnDate: flight.return_at || returnDate
+      });
+
+      return {
+        price: flight.value * adults,
+        airline: flight.airline,
+        departure_at: flight.departure_at,
+        return_at: flight.return_at,
+        flight_number: flight.flight_number,
+        link: deeplink
+      };
+    });
   }
 
   /**
