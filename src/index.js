@@ -3,6 +3,7 @@ import { config } from './config/config.js';
 import vkService from './services/vkService.js';
 import aiService from './services/aiService.js';
 import telegramService from './services/telegramService.js';
+import faqService from './services/faqService.js';
 import postgresDb from './database/db.js';
 import memoryDb from './database/memoryDb.js';
 
@@ -55,6 +56,19 @@ app.post(config.server.webhookPath, async (req, res) => {
 
       // Установка статуса "печатает..."
       await vkService.setTypingStatus(peerId);
+
+      // НОВОЕ: Проверка FAQ перед вызовом AI
+      const faqAnswer = faqService.findAnswer(messageText);
+      if (faqAnswer) {
+        // Нашли ответ в FAQ - отправляем сразу
+        await vkService.sendMessage(peerId, faqAnswer);
+
+        // Сохраняем в историю
+        await database.saveMessage(userData.peerId, 'user', messageText);
+        await database.saveMessage(userData.peerId, 'assistant', faqAnswer);
+
+        return;  // Не вызываем AI
+      }
 
       // Получение истории чата из базы данных
       const conversationHistory = await database.getChatHistory(userData.peerId);
