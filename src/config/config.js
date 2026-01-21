@@ -23,6 +23,10 @@ export const config = {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
     chatId: process.env.TELEGRAM_CHAT_ID || '-4851482920'
   },
+  travelpayouts: {
+    token: process.env.TRAVELPAYOUTS_TOKEN,
+    marker: process.env.TRAVELPAYOUTS_MARKER || '123456'
+  },
   server: {
     port: parseInt(process.env.PORT) || 3000,
     webhookPath: process.env.WEBHOOK_PATH || '/vk'

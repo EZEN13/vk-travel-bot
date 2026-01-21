@@ -1,5 +1,77 @@
 import OpenAI from 'openai';
 import { config } from '../config/config.js';
+import aviasalesApi from './aviasalesApi.js';
+import hotellookApi from './hotellookApi.js';
+
+// Определение инструментов для OpenAI Function Calling
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'search_flights',
+      description: 'Поиск реальных цен на авиабилеты по направлению и датам. Используй когда клиент хочет узнать цены на перелёт и у тебя есть ВСЯ информация: откуда, куда, даты, количество людей.',
+      parameters: {
+        type: 'object',
+        properties: {
+          origin: {
+            type: 'string',
+            description: 'Город вылета (например: Пермь, Москва, Екатеринбург)'
+          },
+          destination: {
+            type: 'string',
+            description: 'Город прилёта (например: Анталия, Дубай, Батуми)'
+          },
+          departure_date: {
+            type: 'string',
+            description: 'Дата вылета в формате YYYY-MM-DD'
+          },
+          return_date: {
+            type: 'string',
+            description: 'Дата возврата в формате YYYY-MM-DD (опционально)'
+          },
+          adults: {
+            type: 'number',
+            description: 'Количество взрослых пассажиров'
+          }
+        },
+        required: ['origin', 'destination', 'departure_date', 'adults']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_hotels',
+      description: 'Поиск реальных цен на отели по городу и датам. Используй когда клиент хочет узнать цены на проживание и у тебя есть ВСЯ информация: город, даты, количество людей.',
+      parameters: {
+        type: 'object',
+        properties: {
+          location: {
+            type: 'string',
+            description: 'Город для поиска отелей (например: Анталия, Дубай, Батуми)'
+          },
+          check_in: {
+            type: 'string',
+            description: 'Дата заезда в формате YYYY-MM-DD'
+          },
+          check_out: {
+            type: 'string',
+            description: 'Дата выезда в формате YYYY-MM-DD'
+          },
+          adults: {
+            type: 'number',
+            description: 'Количество гостей'
+          },
+          stars: {
+            type: 'number',
+            description: 'Звёздность отеля (4 или 5), опционально'
+          }
+        },
+        required: ['location', 'check_in', 'check_out', 'adults']
+      }
+    }
+  }
+];
 
 class AIService {
   constructor() {
@@ -252,14 +324,102 @@ ID клиента: ${userData.peerId}.
         { role: 'user', content: userMessage }
       ];
 
-      const response = await this.openai.chat.completions.create({
+      // Первый запрос к OpenAI с tools
+      let response = await this.openai.chat.completions.create({
         model: this.model,
         messages: messages,
         temperature: 0.3,  // Снижено с 0.7 для минимизации галлюцинаций
-        max_tokens: 1000
+        max_tokens: 1000,
+        tools: TOOLS,
+        tool_choice: 'auto'  // AI сам решает когда вызывать функции
       });
 
-      return response.choices[0].message.content;
+      let assistantMessage = response.choices[0].message;
+
+      // Если AI хочет вызвать функцию
+      if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+        messages.push(assistantMessage);  // Добавляем сообщение AI с tool_calls
+
+        console.log(`🔧 AI вызывает ${assistantMessage.tool_calls.length} функций`);
+
+        // Обрабатываем каждый tool call
+        for (const toolCall of assistantMessage.tool_calls) {
+          const functionName = toolCall.function.name;
+          const functionArgs = JSON.parse(toolCall.function.arguments);
+
+          console.log(`  → ${functionName}:`, functionArgs);
+
+          let functionResult;
+          try {
+            // Вызываем соответствующую функцию
+            if (functionName === 'search_flights') {
+              // Конвертируем названия городов в IATA коды
+              const originCode = aviasalesApi.getCityCode(functionArgs.origin);
+              const destCode = aviasalesApi.getCityCode(functionArgs.destination);
+
+              if (!originCode || !destCode) {
+                functionResult = {
+                  error: 'Не удалось найти коды аэропортов для указанных городов',
+                  origin: functionArgs.origin,
+                  destination: functionArgs.destination
+                };
+              } else {
+                const flights = await aviasalesApi.searchFlights({
+                  origin: originCode,
+                  destination: destCode,
+                  departureDate: functionArgs.departure_date,
+                  returnDate: functionArgs.return_date,
+                  adults: functionArgs.adults
+                });
+
+                functionResult = flights || {
+                  error: 'Не удалось найти авиабилеты. API временно недоступен.',
+                  fallback: 'use_approximate_prices'
+                };
+              }
+            } else if (functionName === 'search_hotels') {
+              const hotels = await hotellookApi.searchHotels({
+                location: functionArgs.location,
+                checkIn: functionArgs.check_in,
+                checkOut: functionArgs.check_out,
+                adults: functionArgs.adults,
+                stars: functionArgs.stars
+              });
+
+              functionResult = hotels || {
+                error: 'Не удалось найти отели. API временно недоступен.',
+                fallback: 'use_approximate_prices'
+              };
+            }
+          } catch (error) {
+            console.error(`❌ Ошибка выполнения ${functionName}:`, error.message);
+            functionResult = {
+              error: error.message,
+              fallback: 'use_approximate_prices'
+            };
+          }
+
+          console.log(`  ✓ Результат ${functionName}:`, functionResult ? 'OK' : 'null');
+
+          // Добавляем результат функции в историю
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(functionResult)
+          });
+        }
+
+        // Второй запрос к OpenAI с результатами функций
+        response = await this.openai.chat.completions.create({
+          model: this.model,
+          messages: messages,
+          temperature: 0.3
+        });
+
+        assistantMessage = response.choices[0].message;
+      }
+
+      return assistantMessage.content;
     } catch (error) {
       console.error('Ошибка получения ответа от OpenAI:', error.message);
       throw error;
