@@ -4,6 +4,8 @@ import { config } from '../config/config.js';
 class TelegramService {
   constructor() {
     this.database = null;
+    // Хранение message_id уведомлений по peerId для возможности редактирования
+    this.notificationMessages = new Map();
 
     if (config.telegram.botToken) {
       this.bot = new TelegramBot(config.telegram.botToken, { polling: true });
@@ -134,16 +136,108 @@ class TelegramService {
       try {
         const message = this.formatLeadMessage(leadData);
         const keyboard = this.getLeadKeyboard(leadData.peerId);
+        const existingMessageId = this.notificationMessages.get(leadData.peerId);
 
-        await this.bot.sendMessage(this.chatId, message, {
+        if (existingMessageId) {
+          // Редактируем существующее уведомление
+          try {
+            await this.bot.editMessageText(message, {
+              chat_id: this.chatId,
+              message_id: existingMessageId,
+              parse_mode: 'HTML',
+              disable_web_page_preview: true,
+              reply_markup: keyboard
+            });
+            console.log('✏️ Уведомление в Telegram обновлено');
+            return;
+          } catch (editError) {
+            // Если не удалось отредактировать — отправим новое
+            console.log('⚠️ Не удалось обновить, отправляю новое уведомление');
+          }
+        }
+
+        // Отправляем новое уведомление
+        const sent = await this.bot.sendMessage(this.chatId, message, {
           parse_mode: 'HTML',
           disable_web_page_preview: true,
           reply_markup: keyboard
         });
 
+        // Сохраняем message_id для будущего редактирования
+        this.notificationMessages.set(leadData.peerId, sent.message_id);
+
         console.log('✅ Уведомление в Telegram отправлено (с кнопками)');
       } catch (error) {
         console.error('Ошибка отправки в Telegram:', error.message);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Отправить уведомление о запросе менеджера (без телефона)
+   */
+  async sendManagerRequestNotification(leadData) {
+    if (!this.bot) {
+      console.warn('Telegram bot не настроен. Пропуск отправки уведомления.');
+      return;
+    }
+
+    return this.retryRequest(async () => {
+      try {
+        const { firstName, lastName, fromId, peerId, summary } = leadData;
+
+        // Структурированные поля из summary
+        let requestBlock = '📋 <b>Запрос:</b>\n';
+
+        if (summary && typeof summary === 'object') {
+          if (summary.destination) {
+            requestBlock += `🌍 Направление: ${summary.destination}\n`;
+          }
+          if (summary.dates) {
+            requestBlock += `📅 Даты: ${summary.dates}\n`;
+          }
+          if (summary.preferences) {
+            requestBlock += `🏖️ Предпочтения: ${summary.preferences}\n`;
+          }
+          if (summary.people) {
+            requestBlock += `👨‍👩‍👧 Состав: ${summary.people}\n`;
+          }
+          if (summary.budget) {
+            requestBlock += `💰 Бюджет: ${summary.budget}\n`;
+          }
+          if (summary.departureCity) {
+            requestBlock += `✈️ Вылет из: ${summary.departureCity}\n`;
+          }
+          requestBlock += `\n📝 Детали: ${summary.details || 'Нет данных'}`;
+        } else {
+          requestBlock += (summary || 'Клиент просит подключить менеджера');
+        }
+
+        const message = `🔔 <b>ЗАПРОС НА МЕНЕДЖЕРА</b>
+
+👤 Клиент: ${firstName} ${lastName}
+🔗 VK: https://vk.com/id${fromId}
+📱 Телефон: не оставлен
+
+${requestBlock}
+
+⚡️ Клиент просит подключиться менеджера в ВК!`;
+
+        const keyboard = this.getLeadKeyboard(peerId);
+
+        const sent = await this.bot.sendMessage(this.chatId, message, {
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+          reply_markup: keyboard
+        });
+
+        // Сохраняем message_id — если потом клиент оставит телефон, обновим
+        this.notificationMessages.set(peerId, sent.message_id);
+
+        console.log('🔔 Уведомление о запросе менеджера отправлено в Telegram');
+      } catch (error) {
+        console.error('Ошибка отправки запроса менеджера в Telegram:', error.message);
         throw error;
       }
     });

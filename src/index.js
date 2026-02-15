@@ -101,17 +101,21 @@ app.post(config.server.webhookPath, async (req, res) => {
         conversationHistory
       );
 
-      // 8. Сохранение сообщений в базу данных
-      await database.saveMessage(userData.peerId, 'user', messageText);
-      await database.saveMessage(userData.peerId, 'assistant', aiResponse);
+      // 8. Проверяем метку [MANAGER_REQUEST] и убираем из текста для клиента
+      const hasManagerRequest = aiResponse.includes('[MANAGER_REQUEST]');
+      const cleanResponse = aiResponse.replace(/\s*\[MANAGER_REQUEST\]\s*/g, '').trim();
 
-      // 9. Отправка ответа пользователю и отслеживание ID
-      const sendResult = await vkService.sendMessage(peerId, aiResponse);
+      // 9. Сохранение сообщений в базу данных
+      await database.saveMessage(userData.peerId, 'user', messageText);
+      await database.saveMessage(userData.peerId, 'assistant', cleanResponse);
+
+      // 10. Отправка ответа пользователю и отслеживание ID
+      const sendResult = await vkService.sendMessage(peerId, cleanResponse);
       if (sendResult?.response) {
         database.trackBotMessage(sendResult.response);
       }
 
-      // 10. Проверка на наличие телефона в сообщении пользователя
+      // 11. Проверка на наличие телефона в сообщении пользователя
       const phoneRegex = /(\+7|8)?[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/;
       if (phoneRegex.test(messageText)) {
         try {
@@ -123,7 +127,7 @@ app.post(config.server.webhookPath, async (req, res) => {
           const conversationSummary = await aiService.summarizeConversation(fullHistory);
           const contactPreference = await aiService.extractContactPreference(fullHistory);
 
-          // Отправка уведомления в Telegram
+          // Отправка уведомления в Telegram (или обновление существующего)
           await telegramService.sendLeadNotification({
             firstName: userData.firstName,
             lastName: userData.lastName,
@@ -136,6 +140,24 @@ app.post(config.server.webhookPath, async (req, res) => {
         } catch (telegramError) {
           // Не падаем если не удалось отправить в Telegram
           console.error('Ошибка отправки уведомления в Telegram:', telegramError.message);
+        }
+      }
+
+      // 12. Если клиент просит менеджера (без телефона) — уведомляем через Telegram
+      if (hasManagerRequest && !phoneRegex.test(messageText)) {
+        try {
+          const fullHistory = [...conversationHistory, { role: 'user', content: messageText }];
+          const conversationSummary = await aiService.summarizeConversation(fullHistory);
+
+          await telegramService.sendManagerRequestNotification({
+            firstName: userData.firstName,
+            lastName: userData.lastName,
+            fromId: userData.fromId,
+            peerId: userData.peerId,
+            summary: conversationSummary
+          });
+        } catch (telegramError) {
+          console.error('Ошибка отправки запроса менеджера в Telegram:', telegramError.message);
         }
       }
     }
