@@ -20,6 +20,7 @@ class VKService {
         const isRetryableError =
           error.code === 'ECONNRESET' ||
           error.code === 'ETIMEDOUT' ||
+          error.code === 'ECONNABORTED' ||
           error.code === 'ECONNREFUSED' ||
           (error.response && error.response.status >= 500);
 
@@ -47,7 +48,7 @@ class VKService {
             access_token: this.accessToken,
             v: this.apiVersion
           },
-          timeout: 5000
+          timeout: 15000
         });
 
         if (response.data.response && response.data.response.length > 0) {
@@ -91,7 +92,7 @@ class VKService {
             access_token: this.accessToken,
             v: this.apiVersion
           },
-          timeout: 5000
+          timeout: 15000
         });
 
         return response.data;

@@ -3,12 +3,14 @@ import { config } from './config/config.js';
 import vkService from './services/vkService.js';
 import aiService from './services/aiService.js';
 import telegramService from './services/telegramService.js';
-import faqService from './services/faqService.js';
 import postgresDb from './database/db.js';
 import memoryDb from './database/memoryDb.js';
 
 // Выбор базы данных: in-memory для тестов, PostgreSQL для продакшена
 const database = process.env.USE_MEMORY_DB === 'true' ? memoryDb : postgresDb;
+
+// Передаём database в telegramService для работы кнопок паузы
+telegramService.setDatabase(database);
 
 const app = express();
 
@@ -25,12 +27,25 @@ app.post(config.server.webhookPath, async (req, res) => {
 
     // Подтверждение сервера VK Callback API
     if (body.type === 'confirmation') {
-      // Нужно будет указать ваш confirmation code из настроек группы VK
       return res.send(process.env.VK_CONFIRMATION_CODE || '');
     }
 
     // Быстрый ответ VK, чтобы не было таймаута
     res.send('ok');
+
+    // Обработка исходящего сообщения от сообщества (менеджер пишет)
+    if (body.type === 'message_reply') {
+      const message = body.object;
+      const peerId = message.peer_id;
+
+      // Проверяем: это сообщение от бота или от менеджера?
+      if (!database.isBotMessage(message.id)) {
+        // Это менеджер — ставим паузу
+        await database.pauseBot(peerId.toString(), 'manager_reply');
+        console.log(`⏸️ Менеджер ответил (message_reply), бот на паузе для peer_id=${peerId}`);
+      }
+      return;
+    }
 
     // Обработка нового сообщения
     if (body.type === 'message_new') {
@@ -39,13 +54,32 @@ app.post(config.server.webhookPath, async (req, res) => {
       const peerId = message.peer_id;
       const fromId = message.from_id;
 
-      // Проверка наличия текста
+      // 1. Определяем: это менеджер (от имени сообщества)?
+      const groupId = parseInt(config.vk.groupId);
+      if (fromId === -groupId || fromId < 0) {
+        // Сообщение от сообщества — проверяем, бот ли это
+        if (!database.isBotMessage(message.id)) {
+          // Это менеджер — ставим паузу
+          await database.pauseBot(peerId.toString(), 'manager');
+          console.log(`⏸️ Менеджер подключился (message_new), бот на паузе для peer_id=${peerId}`);
+        }
+        return;
+      }
+
+      // 2. Проверяем не на паузе ли бот для этого чата
+      const isPaused = await database.isBotPaused(peerId.toString());
+      if (isPaused) {
+        console.log(`⏸️ Бот на паузе для peer_id=${peerId}, пропускаем сообщение`);
+        return;
+      }
+
+      // 3. Проверка наличия текста
       if (!messageText || messageText.trim() === '') {
         await vkService.sendMessage(peerId, 'Отправьте пожалуйста ваше сообщение текстом 😊');
         return;
       }
 
-      // Получение информации о пользователе
+      // 4. Получение информации о пользователе
       const userInfo = await vkService.getUserInfo(fromId);
       const userData = {
         peerId: peerId.toString(),
@@ -54,56 +88,50 @@ app.post(config.server.webhookPath, async (req, res) => {
         fromId: fromId.toString()
       };
 
-      // Установка статуса "печатает..."
+      // 5. Установка статуса "печатает..."
       await vkService.setTypingStatus(peerId);
 
-      // НОВОЕ: Проверка FAQ перед вызовом AI
-      const faqAnswer = faqService.findAnswer(messageText);
-      if (faqAnswer) {
-        // Нашли ответ в FAQ - отправляем сразу
-        await vkService.sendMessage(peerId, faqAnswer);
-
-        // Сохраняем в историю
-        await database.saveMessage(userData.peerId, 'user', messageText);
-        await database.saveMessage(userData.peerId, 'assistant', faqAnswer);
-
-        return;  // Не вызываем AI
-      }
-
-      // Получение истории чата из базы данных
+      // 6. Получение истории чата из базы данных
       const conversationHistory = await database.getChatHistory(userData.peerId);
 
-      // Получение ответа от AI
+      // 7. Получение ответа от AI
       const aiResponse = await aiService.getChatResponse(
         messageText,
         userData,
         conversationHistory
       );
 
-      // Сохранение сообщений в базу данных
+      // 8. Сохранение сообщений в базу данных
       await database.saveMessage(userData.peerId, 'user', messageText);
       await database.saveMessage(userData.peerId, 'assistant', aiResponse);
 
-      // Отправка ответа пользователю
-      await vkService.sendMessage(peerId, aiResponse);
+      // 9. Отправка ответа пользователю и отслеживание ID
+      const sendResult = await vkService.sendMessage(peerId, aiResponse);
+      if (sendResult?.response) {
+        database.trackBotMessage(sendResult.response);
+      }
 
-      // Проверка на наличие телефона в сообщении пользователя для отправки уведомления
+      // 10. Проверка на наличие телефона в сообщении пользователя
       const phoneRegex = /(\+7|8)?[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/;
       if (phoneRegex.test(messageText)) {
         try {
           // Извлечение телефона
           const phone = messageText.match(phoneRegex)[0];
 
-          // Получение выжимки всего диалога для уведомления
-          const conversationSummary = await aiService.summarizeConversation(conversationHistory);
+          // Получение структурированной выжимки диалога и способа связи
+          const fullHistory = [...conversationHistory, { role: 'user', content: messageText }];
+          const conversationSummary = await aiService.summarizeConversation(fullHistory);
+          const contactPreference = await aiService.extractContactPreference(fullHistory);
 
           // Отправка уведомления в Telegram
           await telegramService.sendLeadNotification({
             firstName: userData.firstName,
             lastName: userData.lastName,
             fromId: userData.fromId,
+            peerId: userData.peerId,
             phone: phone,
-            request: conversationSummary
+            contactPreference: contactPreference,
+            summary: conversationSummary
           });
         } catch (telegramError) {
           // Не падаем если не удалось отправить в Telegram
@@ -129,7 +157,7 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     message: 'VK Travel Bot для турагентства "Планета"',
-    version: '1.0.0'
+    version: '2.0.0'
   });
 });
 
