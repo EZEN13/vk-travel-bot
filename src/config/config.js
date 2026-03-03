@@ -33,6 +33,9 @@ export const config = {
     apiKey: process.env.PINECONE_API_KEY,
     indexName: process.env.PINECONE_INDEX_NAME || 'planeta-kb'
   },
+  uon: {
+    apiKey: process.env.UON_API_KEY
+  },
   server: {
     port: parseInt(process.env.PORT) || 3000,
     webhookPath: process.env.WEBHOOK_PATH || '/vk'

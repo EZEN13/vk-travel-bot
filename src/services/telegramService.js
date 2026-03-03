@@ -296,10 +296,16 @@ ${requestBlock}
    * Получить inline-клавиатуру для уведомления о лиде
    */
   getLeadKeyboard(peerId) {
+    const groupId = config.vk.groupId;
+    const vkDialogUrl = `https://vk.com/gim${groupId}?sel=${peerId}`;
+
     return {
       inline_keyboard: [
         [
-          { text: '⏸️ Подключиться (отключить бота)', callback_data: `pause_${peerId}` }
+          { text: '💬 Открыть диалог в ВК', url: vkDialogUrl }
+        ],
+        [
+          { text: '⏸️ Отключить бота', callback_data: `pause_${peerId}` }
         ]
       ]
     };
