@@ -199,7 +199,8 @@ app.post(config.server.webhookPath, async (req, res) => {
       const peerId = message.peer_id;
 
       // Проверяем: это сообщение от бота или от менеджера?
-      if (!database.isBotMessage(message.id)) {
+      const isBotMsg = await database.isBotMessage(message.id);
+      if (!isBotMsg) {
         // Это менеджер — ставим паузу
         await database.pauseBot(peerId.toString(), 'manager_reply');
         console.log(`⏸️ Менеджер ответил (message_reply), бот на паузе для peer_id=${peerId}`);
@@ -218,7 +219,8 @@ app.post(config.server.webhookPath, async (req, res) => {
       const groupId = parseInt(config.vk.groupId);
       if (fromId === -groupId || fromId < 0) {
         // Сообщение от сообщества — проверяем, бот ли это
-        if (!database.isBotMessage(message.id)) {
+        const isBotMsg = await database.isBotMessage(message.id);
+        if (!isBotMsg) {
           // Это менеджер — ставим паузу
           await database.pauseBot(peerId.toString(), 'manager');
           console.log(`⏸️ Менеджер подключился (message_new), бот на паузе для peer_id=${peerId}`);
