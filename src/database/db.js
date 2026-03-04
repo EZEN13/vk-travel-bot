@@ -39,6 +39,17 @@ class Database {
 
         CREATE INDEX IF NOT EXISTS idx_peer_id ON chat_history(peer_id);
         CREATE INDEX IF NOT EXISTS idx_created_at ON chat_history(created_at);
+
+        CREATE TABLE IF NOT EXISTS paused_chats (
+          peer_id VARCHAR(255) PRIMARY KEY,
+          paused_by VARCHAR(50) NOT NULL,
+          paused_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS bot_messages (
+          message_id VARCHAR(255) PRIMARY KEY,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
       `);
 
       console.log('База данных инициализирована');
@@ -93,13 +104,104 @@ class Database {
    */
   async cleanOldHistory(daysToKeep = 30) {
     try {
+      const intervalString = `${daysToKeep} days`;
       await this.pool.query(
-        'DELETE FROM chat_history WHERE created_at < NOW() - INTERVAL $1 DAY',
-        [daysToKeep]
+        `DELETE FROM chat_history WHERE created_at < NOW() - INTERVAL '${intervalString}'`
       );
       console.log(`Очищена история старше ${daysToKeep} дней`);
     } catch (error) {
       console.error('Ошибка очистки истории:', error.message);
+    }
+  }
+
+  /**
+   * Поставить бота на паузу для чата
+   */
+  async pauseBot(peerId, pausedBy = 'manager') {
+    try {
+      await this.pool.query(
+        'INSERT INTO paused_chats (peer_id, paused_by) VALUES ($1, $2) ON CONFLICT (peer_id) DO UPDATE SET paused_by = $2, paused_at = CURRENT_TIMESTAMP',
+        [peerId, pausedBy]
+      );
+      console.log(`⏸️ Бот на паузе для peer_id=${peerId} (причина: ${pausedBy})`);
+    } catch (error) {
+      console.error('Ошибка паузы бота:', error.message);
+    }
+  }
+
+  /**
+   * Снять бота с паузы
+   */
+  async resumeBot(peerId) {
+    try {
+      await this.pool.query(
+        'DELETE FROM paused_chats WHERE peer_id = $1',
+        [peerId]
+      );
+      console.log(`▶️ Бот возобновлён для peer_id=${peerId}`);
+    } catch (error) {
+      console.error('Ошибка возобновления бота:', error.message);
+    }
+  }
+
+  /**
+   * Проверить, на паузе ли бот для чата
+   */
+  async isBotPaused(peerId) {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM paused_chats WHERE peer_id = $1',
+        [peerId]
+      );
+
+      if (result.rows.length === 0) {
+        return false;
+      }
+
+      const pausedAt = new Date(result.rows[0].paused_at);
+      const now = new Date();
+      const hoursPassed = (now - pausedAt) / (1000 * 60 * 60);
+
+      // Автоматически снимаем паузу через 48 часов
+      if (hoursPassed >= 48) {
+        await this.resumeBot(peerId);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Ошибка проверки паузы бота:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Отметить сообщение как отправленное ботом
+   */
+  async trackBotMessage(messageId) {
+    try {
+      await this.pool.query(
+        'INSERT INTO bot_messages (message_id) VALUES ($1) ON CONFLICT (message_id) DO NOTHING',
+        [messageId.toString()]
+      );
+    } catch (error) {
+      console.error('Ошибка трекинга сообщения бота:', error.message);
+    }
+  }
+
+  /**
+   * Проверить, является ли сообщение сообщением бота
+   */
+  async isBotMessage(messageId) {
+    try {
+      const result = await this.pool.query(
+        'SELECT * FROM bot_messages WHERE message_id = $1',
+        [messageId.toString()]
+      );
+      return result.rows.length > 0;
+    } catch (error) {
+      console.error('Ошибка проверки сообщения бота:', error.message);
+      return false;
     }
   }
 
