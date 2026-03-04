@@ -13,6 +13,9 @@ export const config = {
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini'
   },
   postgres: {
+    // Если есть DATABASE_URL (Railway/Heroku) - используем его
+    // Иначе используем отдельные переменные (локальная разработка)
+    connectionString: process.env.DATABASE_URL,
     host: process.env.POSTGRES_HOST || 'localhost',
     port: parseInt(process.env.POSTGRES_PORT) || 5432,
     database: process.env.POSTGRES_DB || 'vk_bot_db',

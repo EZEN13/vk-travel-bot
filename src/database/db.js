@@ -5,13 +5,22 @@ const { Pool } = pg;
 
 class Database {
   constructor() {
-    this.pool = new Pool({
-      host: config.postgres.host,
-      port: config.postgres.port,
-      database: config.postgres.database,
-      user: config.postgres.user,
-      password: config.postgres.password
-    });
+    // Если есть DATABASE_URL - используем его (Railway/Heroku)
+    // Иначе используем отдельные параметры (локальная разработка)
+    if (config.postgres.connectionString) {
+      this.pool = new Pool({
+        connectionString: config.postgres.connectionString,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+      });
+    } else {
+      this.pool = new Pool({
+        host: config.postgres.host,
+        port: config.postgres.port,
+        database: config.postgres.database,
+        user: config.postgres.user,
+        password: config.postgres.password
+      });
+    }
   }
 
   /**
