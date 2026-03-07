@@ -13,7 +13,7 @@ class TavilyService {
    * @param {string} searchDepth - Глубина поиска: 'basic' или 'advanced' (по умолчанию 'basic')
    * @returns {Promise<string>} Краткий ответ на запрос
    */
-  async searchInfo(query, searchDepth = 'basic') {
+  async searchInfo(query, searchDepth = 'advanced') {
     console.log(`🌐 Tavily: "${query}"`);
 
     try {
@@ -23,9 +23,9 @@ class TavilyService {
           api_key: this.apiKey,
           query: query,
           search_depth: searchDepth,
-          include_answer: true,
-          include_domains: [], // Можно ограничить домены если нужно
-          max_results: 3 // Берём топ-3 результата
+          include_answer: 'basic',
+          include_domains: [],
+          max_results: 5
         },
         {
           headers: {
@@ -67,19 +67,20 @@ class TavilyService {
   formatSearchResult(answer, results) {
     let formatted = '';
 
-    // Добавляем краткий ответ если есть
+    // ВАЖНО: answer — это краткий вывод Tavily AI, он самый точный
+    // GPT должен опираться на него в первую очередь
     if (answer) {
-      formatted += `${answer}\n\n`;
+      formatted += `ВЫВОД ПОИСКА (используй это как основной ответ):\n${answer}\n\n`;
     }
 
-    // Добавляем топ-3 источника
+    // Добавляем топ-3 источника с увеличенным контентом
     if (results.length > 0) {
-      formatted += 'Источники:\n';
+      formatted += 'Детали из источников:\n';
       results.slice(0, 3).forEach((result, index) => {
         formatted += `${index + 1}. ${result.title}\n`;
         if (result.content) {
-          // Берём первые 200 символов контента
-          formatted += `   ${result.content.substring(0, 200)}...\n`;
+          // Берём первые 500 символов — там часто ключевые факты
+          formatted += `   ${result.content.substring(0, 500)}\n`;
         }
       });
     }
